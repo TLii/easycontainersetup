@@ -1,0 +1,46 @@
+# Easy Container Setup Model (ECSM)
+# Minimal Dockerfile example
+# Copyright 2023 Tuomas Liinamaa <tlii@iki.fi>
+
+# This program is free software: you can redistribute it and/or modify
+# it under the terms of the GNU Affero General Public License as
+# published by the Free Software Foundation, either version 3 of the
+# License, or (at your option) any later version.
+
+# This program is distributed in the hope that it will be useful,
+# but WITHOUT ANY WARRANTY; without even the implied warranty of
+# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+# GNU Affero General Public License for more details.
+
+# You should have received a copy of the GNU Affero General Public License
+# along with this program.  If not, see <https://www.gnu.org/licenses/>.
+
+
+# Partially derived from Docker Hub's official images;
+# Copyright 2014 Docker, Inc.
+
+FROM debian:bullseye-slim
+
+ENV APP_INSTALL_DIR /app
+
+# Copy data for final image
+COPY fs /
+
+# Ensure all scripts are executable
+RUN chmod a+x /docker-entrypoint.sh;  \
+    chmod a+rx /opt/lib/*.sh; \
+    chmod a+rx /opt/scripts/*.sh; \
+    chmod a+rx /opt/custom_scripts/*/*;
+
+# If you need to configure ownerships, do that here.
+# Perhaps you are using /fs to inject web files that should be owned by www-data
+# RUN chown [user]:[group] /path/to/file(s);
+
+WORKDIR ${APP_INSTALL_DIR}
+
+# Do not change the entrypoint. This is the foundation for the setup flow.
+ENTRYPOINT ["/docker-entrypoint.sh"]
+
+# This command is run in the end of the entrypoint flow, and must remain running.
+# See Docker documentation, if unclear.
+CMD ["tail -f /dev/stderr"]
