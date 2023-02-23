@@ -30,10 +30,10 @@ for sc in /opt/lib/*.sh; do $sc; done
 for sc in /opt/scripts/*.sh; do $sc; done
 
 
-run_init
+run_init "$@"
 
-run_setup
+run_setup "$@"
 
-run_finish
+run_finish "$@"
 
-run_entrypoint
+run_entrypoint "$@"
