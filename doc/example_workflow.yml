@@ -1,0 +1,139 @@
+name: Pipeline action
+
+on:
+  push:
+    branches:
+    - master
+    - develop
+  schedule:
+    - cron: '0 * * * *'
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref_name }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    strategy:
+      matrix:
+        target-stage: [ base, fpm, apache2]
+    runs-on: ubuntu-latest
+
+    env:
+      APP_REPOSITORY: https://path/to/git
+      DOCKER_IMAGE_NAME: user/image
+      REGISTRY_URL: ${{ secrets.REGISTRY_URL } # Defaults to Docker Hub
+      REGISTRY_USER:  ${{ secrets.REGISTRY_USER }} # If needed
+      REGISTRY_PASSWORD: ${{ secrets.REGISTRY_PASSWORD }} # If needed
+
+    steps:
+    - name: Code checkout
+      uses: actions/checkout@v3
+
+    - name: Check app repository for changes
+      run: |
+        echo "BUILD_NEEDED=false" >> $GITHUB_ENV
+
+        # Ensure .ci exists
+        [[ -d .ci ]] || mkdir -p .ci
+
+        # Get current app version
+        current_app_version="$(git ls-remote --refs --tags $APP_REPOSITORY | awk '{print $2}' | sed -E 's#.+/tags/(.+)#\1#g' | grep v7 | sort -V | tail -1)"
+
+        if [[ ! -f .ci/app_version || -z $(cat .ci/app_version) ]]; then
+
+          # If upstream version is not recorded, assume version change
+
+          echo "Last upstream version has not been recorded, so assuming version change."
+          echo "APP_VERSION=$current_app_version" >> $GITHUB_ENV
+          echo $current_app_version > .ci/app_version
+
+        elif [[ $current_app_version != $(cat .ci/app_version) ]]; then
+
+          # If current upstream version differs from recorded one, update is needed.
+
+          echo "Last and current upstream versions differ, triggering update"
+          echo $current_app_version > .ci/app_version
+          echo "APP_VERSION=$current_app_version" >> $GITHUB_ENV
+
+        else
+
+          # If upstream is the same, use recorded app version and don't trigger update - at least not yet.
+
+          echo "Upstream version hasn't changed."
+          echo "APP_VERSION=$(cat .ci/app_version)" >> $GITHUB_ENV
+
+        fi
+
+    - name: Commit changed version number
+      id: commit
+      run: |
+        git config --local user.email "github-actions@github.com"
+        git config --local user.name "github-actions"
+
+        # Check if files have changed (ie. version change) and if so, trigger a rebuild
+        if [-z "$(git status --porcelain)"]; then
+          echo "BUILD_NEEDED=false" >> $GITHUB_ENV
+        else
+          git commit -am "Automatic version update"
+          echo "BUILD_NEEDED=true" >> $GITHUB_ENV
+        fi
+      shell: bash
+
+    - name: Check if rebuild is needed
+      if: env.BUILD_NEEDED != 'true'
+      run: |
+        if [[ $GITHUB_EVENT_NAME == 'push' || $GITHUB_EVENT_NAME == 'workflow_dispatch' ]]; then
+          echo "BUILD_NEEDED=true" >> $GITHUB_ENV
+        fi
+
+    - name: Setup build variables
+      id: setup
+      if: env.BUILD_NEEDED == 'true'
+      run: |
+        echo "BRANCH=$(echo ${GITHUB_REF_NAME})" >> $GITHUB_ENV
+        echo "GITHUB_HASH=$(git rev-parse --short "$GITHUB_SHA")" >> $GITHUB_ENV
+        echo "BUILD_VERSION=$BRANCH-$APP_VERSION-$GITHUB_RUN_NUMBER" >> $GITHUB_ENV
+
+    - name: Build master images and push them to Registry
+      if: >-
+        env.BRANCH == 'master' ||
+        env.BUILD_NEEDED == 'true'
+      uses: mr-smithers-excellent/docker-build-push@v5.6
+      with:
+        image: ${{ env.DOCKER_IMAGE_NAME }}
+        tags: latest, ${{ matrix.target-stage }}, ${{ matrix.target-stage }}-latest, ${{ matrix.target-stage }}-${{ env.BRANCH }}-latest, ${{ matrix.target-stage }}-${{ env.BRANCH }}, ${{ matrix.target-stage }}-${{ env.BUILD_VERSION }}, ${{ matrix.target-stage }}-${{ env.GITHUB_HASH }}, ${{ matrix.target-stage }}-${{ env.APP_VERSION }}-${{ env.BRANCH }}, ${{ matrix.target-stage }}-${{ env.APP_VERSION }}  # optional
+        registry: ${{ env.REGISTRY_URL }}
+        dockerfile: Dockerfile # optional, default is Dockerfile
+        target: ${{ matrix.target-stage }} # optional
+        username:  ${{ env.REGISTRY_USER }}  # optional
+        password: ${{ env.REGISTRY_PASSWORD }} # optional
+
+        # Docker build arguments passed via --build-arg
+        #buildArgs: # optional
+        # Docker build labels passed via --label
+        #labels: # optional
+        # Adds latest tag to auto-generated GitOps tag
+        #addLatest: false # optional, default is false
+
+    - name: Build non-master images and push them to Registry
+      if: >-
+        env.BRANCH != 'master' ||
+        env.BUILD_NEEDED == 'true'
+      uses: mr-smithers-excellent/docker-build-push@v5.6
+      with:
+        image: ${{ env.DOCKER_IMAGE_NAME }}
+        tags: ${{ matrix.target-stage }}-${{ env.BRANCH }}-latest, ${{ matrix.target-stage }}-${{ env.BRANCH }}, ${{ matrix.target-stage }}-${{ env.BUILD_VERSION }}, ${{ matrix.target-stage }}-${{ env.GITHUB_HASH }}, ${{ matrix.target-stage }}-${{ env.APP_VERSION }}-${{ env.BRANCH }} # optional
+        registry: ${{ env.REGISTRY_URL }}
+        dockerfile: Dockerfile # optional, default is Dockerfile
+        target: ${{ matrix.target-stage }} # optional
+        username:  ${{ env.REGISTRY_USER }}  # optional
+        password: ${{ env.REGISTRY_PASSWORD }} # optional
+
+        # Docker build arguments passed via --build-arg
+        #buildArgs: # optional
+        # Docker build labels passed via --label
+        #labels: # optional
+        # Adds latest tag to auto-generated GitOps tag
+        #addLatest: false # optional, default is false
